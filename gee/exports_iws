@@ -1,0 +1,115 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var naip = ee.ImageCollection("USDA/NAIP/DOQQ"),
+    lithology = ee.Image("CSP/ERGo/1_0/US/lithology"),
+    physiography = ee.Image("CSP/ERGo/1_0/US/physiography"),
+    ned_landform = ee.Image("CSP/ERGo/1_0/US/landforms"),
+    ned_mtpi = ee.Image("CSP/ERGo/1_0/US/mTPI"),
+    ned_chili = ee.Image("CSP/ERGo/1_0/US/CHILI"),
+    ned = ee.Image("USGS/NED"),
+    mi_res = ee.FeatureCollection("users/luoqixin/Final_res_IWS_MI"),
+    mi_nl = ee.FeatureCollection("users/luoqixin/MI_NL_IWS"),
+    wi_nl = ee.FeatureCollection("users/luoqixin/WI_NL_IWS"),
+    wi_res = ee.FeatureCollection("users/luoqixin/WI_Res_363_IWS");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+
+var nedClassNum = [11, 12, 13, 14, 15, 21, 22, 23, 24, 31, 32, 33, 34, 41, 42];
+var nedClassNames = [
+  'Peak/ridge (warm)',
+  'Peak/ridge',
+  'Peak/ridge (cool)',
+  'Mountain/divide',
+  'Cliff',
+  'Upper slope (warm)',
+  'Upper slope',
+  'Upper slope (cool)',
+  'Upper slope (flat)',
+  'Lower slope (warm)',
+  'Lower slope',
+  'Lower slope (cool)',
+  'Lower slope (flat)',
+  'Valley',
+  'Valley (narrow)',
+];
+var lithologyClassNum = [0, 1, 3, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20];
+var lithologyClassNames = [
+  'Water',
+  'Carbonate',
+  'Non-carbonate',
+  'Alkaline intrusive',
+  'Silicic residual',
+  'Extrusive volcanic',
+  'Colluvial sediment',
+  'Glacial till clay',
+  'Glacial till loam',
+  'Glacial till coarse',
+  'Glacial lake sediment fine',
+  'Glacial outwash coarse',
+  'Hydric',
+  'Eolian sediment coarse',
+  'Eolian sediment fine',
+  'Saline lake sediment',
+  'Alluvium and coastal sediment fine',
+  'Coastal sediment coarse',
+];
+
+var setMeanProperty = function(image, name, propertyName) {
+  return function(feature) {
+    var mean = image.reduceRegion({
+      reducer: ee.Reducer.mean(),
+      geometry: feature.geometry(),
+      // maxPixels: 1e9,
+      // bestEffort: true,
+      scale: 40,
+    });
+    return feature.set(ee.Dictionary({}).set(propertyName, ee.Dictionary(mean).get(name)));
+  }
+}
+
+var setPercentProperty = function(image, classList, classNameList, name) {
+  classList = ee.List(classList);
+  classNameList = ee.List(classNameList);
+  return function(feature) {
+    var cList = image.reduceRegion({
+      reducer: ee.Reducer.toList(),
+      geometry: feature.geometry(),
+    });
+    cList = ee.List(ee.Dictionary(cList).get(name));
+    var pList = classList.map(function(c) {
+      return cList.frequency(c);
+    });
+    var result = pList.map(function(c) {
+      return ee.Number(c).divide(cList.size());
+    });
+    return feature.set(ee.Dictionary.fromLists(classNameList, result));
+  }
+}
+
+// Initialize labels
+var nl = mi_nl.merge(wi_nl);
+var res = mi_res.merge(wi_res);
+
+nl = nl.map(function(feature) {
+  return feature.set({ res: 0 });
+});
+
+res = res.map(function(feature) {
+  return feature.set({ res: 1 });
+});
+
+var trainning = nl.merge(res);
+print(trainning.size());
+
+// Set properties
+trainning = trainning.map(setPercentProperty(ned_landform, nedClassNum, nedClassNames, 'constant'));
+trainning = trainning.map(setPercentProperty(lithology, lithologyClassNum, lithologyClassNames, 'b1'));
+trainning = trainning.map(setMeanProperty(ned_mtpi, 'elevation', 'mtpi'));
+trainning = trainning.map(setMeanProperty(ned_chili, 'constant', 'chili'));
+trainning = trainning.map(setMeanProperty(physiography, 'constant', 'physiography'));
+trainning = trainning.map(setMeanProperty(ned, 'elevation', 'ned'));
+
+Export.table.toDrive({
+  collection: trainning,
+  description: 'lakes_iws_training',
+  fileFormat: 'CSV'
+});
